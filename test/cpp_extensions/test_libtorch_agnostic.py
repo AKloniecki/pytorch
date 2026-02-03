@@ -46,6 +46,8 @@ def get_supported_dtypes():
         torch.float8_e4m3fn,
         torch.float8_e5m2fnuz,
         torch.float8_e4m3fnuz,
+        torch.float8_e8m0fnu,
+        torch.float4_e2m1fn_x2,
         torch.complex32,
         torch.complex64,
         torch.complex128,
