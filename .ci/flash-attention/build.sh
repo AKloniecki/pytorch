@@ -97,6 +97,11 @@ if [[ "${FA_TEST_BUILD}" == "true" ]]; then
     export FLASH_ATTN_LOCAL_VERSION="${BUILD_DATE}.cu${CUDA_SHORT}"
 fi
 
+# stable ABI wheel requires torch>=2.9.0
+# since Python 3.9 support was dropped in torch 2.9.0, we need to use Python 3.10+
+sed -i 's/python_requires=">=3.8"/python_requires=">=3.10"/' setup.py
+sed -i 's/"torch",/"torch>=2.9.0",/' setup.py
+
 "$PYTHON" setup.py bdist_wheel \
     -d "$FA_FINAL_PACKAGE_DIR" \
     -k \
