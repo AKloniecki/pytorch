@@ -503,6 +503,72 @@ class AOTAutogradCachePickler(FxGraphCachePickler):
             }
         )
 
+    # pyrefly: ignore [bad-override]
+    def reducer_override(self, obj: Any) -> Any:
+        """
+        Override to handle tensor subclasses (like DTensor) that aren't caught
+        by the dispatch_table's exact type matching.
+
+        The dispatch_table only matches exact types, so subclasses like DTensor
+        fall through to the default __reduce_ex__ which includes non-deterministic
+        storage addresses. This method catches those cases using isinstance checks.
+        """
+        # Handle tensor subclasses that aren't exactly torch.Tensor
+        # dispatch_table already handles torch.Tensor exactly
+        if isinstance(obj, torch.Tensor) and type(obj) is not torch.Tensor:
+            return self._reduce_tensor_subclass(obj)
+        # Return NotImplemented to fall back to default behavior
+        return NotImplemented
+
+    def _reduce_tensor_subclass(self, tensor: torch.Tensor) -> Any:
+        """
+        Reduce a tensor subclass to a stable key for caching.
+        Uses the metadata from __tensor_flatten__ to capture subclass-specific info.
+        """
+        from torch._inductor.codecache import extract_tensor_metadata_for_cache_key
+        from torch.utils._python_dispatch import is_traceable_wrapper_subclass
+
+        metadata = extract_tensor_metadata_for_cache_key(tensor)
+
+        # Recursively handle inner tensors for nested subclasses
+        inner_metadata = {}
+        subclass_metadata = None
+        if is_traceable_wrapper_subclass(tensor):
+            inner_tensors, subclass_metadata = tensor.__tensor_flatten__()
+            for name in inner_tensors:
+                inner_tensor = getattr(tensor, name)
+                if is_traceable_wrapper_subclass(inner_tensor):
+                    inner_metadata[name] = self._reduce_tensor_subclass(inner_tensor)
+
+        subclass_key = self._subclass_cache_key(subclass_metadata)
+        return (_ident, (metadata, subclass_key, inner_metadata))
+
+    def _subclass_cache_key(self, subclass_metadata: Any) -> Any:
+        """
+        Get a stable cache key for subclass metadata.
+        For DTensorSpec, use repr() which is stable across processes.
+        For other types, fall back to hash().
+        """
+        from torch.distributed.tensor._dtensor_spec import DTensorSpec
+
+        # TODO: For cross-process cache stability, we ideally want stable hashing
+        # for all tensor subclasses. However, making DTensorSpec/DeviceMesh use
+        # stable hashing (e.g., blake2b) has performance implications for eager
+        # runtime where these hashes are used frequently in sharding propagation.
+        # Since DTensorSpec and its components (DeviceMesh, Placement types) have
+        # stable repr() implementations, we use repr() here for DTensor specifically.
+        # Other subclasses fall back to hash() which may not be cross-process stable.
+        #
+        # DTensor's __tensor_flatten__ returns (DTensorSpec, requires_grad)
+        if (
+            isinstance(subclass_metadata, tuple)
+            and len(subclass_metadata) >= 1
+            and isinstance(subclass_metadata[0], DTensorSpec)
+        ):
+            return repr(subclass_metadata)
+
+        return hash(subclass_metadata)
+
     def _reduce_aot_config(self, aot_config: AOTConfig):
         """
         Reduce the config to a stable key for caching.
